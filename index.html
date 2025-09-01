@@ -25,12 +25,12 @@
     <!-- Input form -->
     <div class="card shadow-sm p-3 mb-4">
       <div class="mb-3">
-        <input type="text" id="title-input" class="form-control" placeholder="Enter Post Title">
+        <input type="text" id="title-input" class="form-control" placeholder="Enter Blog Title">
       </div>
       <div class="mb-3">
         <textarea id="content-input" class="form-control" placeholder="Write your blog post..." rows="3"></textarea>
       </div>
-      <button id="add-post" class="btn btn-primary w-100">Add Post</button>
+      <button id="add-post" class="btn btn-primary w-100">Add Blog</button>
     </div>
 
     <!-- Post list -->
@@ -58,10 +58,46 @@
     const state = {
       posts: [],
       editingIndex: null,
-      history: [] // store deleted posts
+      history: [] // store deleted posts (will be persisted)
     };
 
-    // ✅ Render posts
+    // ---------- new helper: localStorage persistence for history ----------
+    const HISTORY_KEY = "blog_history_v1"; // key used in localStorage
+    const KEEP_MS = 10 * 24 * 60 * 60 * 1000; // 10 days in ms
+
+    function saveHistoryToLocal() {
+      try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
+      } catch (e) {
+        // if storage fails, silently ignore (quota, private mode, etc.)
+      }
+    }
+
+    function loadHistoryFromLocal() {
+      try {
+        const raw = localStorage.getItem(HISTORY_KEY);
+        if (!raw) {
+          state.history = [];
+          return;
+        }
+        const arr = JSON.parse(raw);
+        const now = Date.now();
+        // keep only items deleted within KEEP_MS window
+        const filtered = (arr || []).filter(item => {
+          // prefer ISO timestamp if present, otherwise try to parse display string
+          const ts = item.deletedAtISO ? Date.parse(item.deletedAtISO) : Date.parse(item.deletedAt);
+          if (!ts || isNaN(ts)) return false;
+          return (now - ts) <= KEEP_MS;
+        });
+        state.history = filtered;
+        // save back to cleanup expired ones
+        saveHistoryToLocal();
+      } catch (e) {
+        state.history = [];
+      }
+    }
+
+    // ---------- render posts ----------
     function renderPosts() {
       const container = document.getElementById("post-list");
       container.innerHTML = "";
@@ -119,23 +155,27 @@
           content.className = "card-text";
           content.textContent = post.content;
 
-          // ✅ Show created date
+          // ✅ Show created date (if present)
           const createdAt = document.createElement("small");
           createdAt.className = "text-muted d-block mb-2";
-          createdAt.textContent = `Posted on: ${post.createdAt}`;
+          createdAt.textContent = `Posted on: ${post.createdAt || ""}`;
 
           const deleteBtn = document.createElement("button");
           deleteBtn.className = "btn btn-danger btn-sm me-2";
           deleteBtn.textContent = "Delete";
           deleteBtn.addEventListener("click", () => {
-            // ✅ Move deleted post to history
+            // store original index so we can restore to the same place
             state.history.push({
               ...state.posts[index],
-              deletedAt: new Date().toLocaleString()
+              deletedAt: new Date().toLocaleString(),
+              deletedAtISO: new Date().toISOString(),
+              originalIndex: index
             });
+            saveHistoryToLocal(); // persist history
             state.posts.splice(index, 1);
             if (state.editingIndex === index) state.editingIndex = null;
             renderPosts();
+            // keep history display current if modal open
             renderHistory();
           });
 
@@ -159,30 +199,91 @@
       });
     }
 
-    // ✅ Render History
+    // ---------- render history (with Restore) ----------
     function renderHistory() {
       const historyContainer = document.getElementById("history-list");
       historyContainer.innerHTML = "";
+
+      // Clean expired entries on each render
+      const now = Date.now();
+      state.history = state.history.filter(item => {
+        const ts = item.deletedAtISO ? Date.parse(item.deletedAtISO) : Date.parse(item.deletedAt);
+        return ts && !isNaN(ts) && (now - ts) <= KEEP_MS;
+      });
+      saveHistoryToLocal();
 
       if (state.history.length === 0) {
         historyContainer.innerHTML = "<p class='text-muted'>No deleted blogs yet.</p>";
         return;
       }
 
-      state.history.forEach((post) => {
+      state.history.forEach((post, idx) => {
         const item = document.createElement("div");
-        item.className = "list-group-item";
-        item.innerHTML = `
-          <h6>${post.title}</h6>
-          <p>${post.content}</p>
-          <small class="text-muted">Posted on: ${post.createdAt}</small><br>
-          <small class="text-muted">Deleted at: ${post.deletedAt}</small>
-        `;
+        item.className = "list-group-item d-flex flex-column";
+
+        const title = document.createElement("h6");
+        title.textContent = post.title;
+
+        const p = document.createElement("p");
+        p.textContent = post.content;
+
+        const meta = document.createElement("small");
+        const deletedLabel = post.deletedAt || (post.deletedAtISO ? new Date(post.deletedAtISO).toLocaleString() : "");
+        meta.className = "text-muted";
+        meta.innerHTML = `Posted on: ${post.createdAt || ""} <br> Deleted at: ${deletedLabel}`;
+
+        const controls = document.createElement("div");
+        controls.className = "mt-2";
+
+        // Restore button
+        const restoreBtn = document.createElement("button");
+        restoreBtn.className = "btn btn-success btn-sm me-2";
+        restoreBtn.textContent = "Restore";
+        restoreBtn.addEventListener("click", () => {
+          // Insert back at original index if possible
+          const orig = Number.isFinite(post.originalIndex) ? post.originalIndex : null;
+          const restored = { title: post.title, content: post.content, createdAt: post.createdAt };
+
+          if (orig !== null && orig <= state.posts.length) {
+            // if original index available and within bounds, insert there
+            state.posts.splice(orig, 0, restored);
+          } else {
+            // otherwise append at end
+            state.posts.push(restored);
+          }
+
+          // remove from history and persist
+          state.history.splice(idx, 1);
+          saveHistoryToLocal();
+
+          // re-render both lists
+          renderPosts();
+          renderHistory();
+        });
+
+        // Optionally: Permanent delete button (if you want)
+        const permDelBtn = document.createElement("button");
+        permDelBtn.className = "btn btn-outline-danger btn-sm";
+        permDelBtn.textContent = "Delete Permanently";
+        permDelBtn.addEventListener("click", () => {
+          state.history.splice(idx, 1);
+          saveHistoryToLocal();
+          renderHistory();
+        });
+
+        controls.appendChild(restoreBtn);
+        controls.appendChild(permDelBtn);
+
+        item.appendChild(title);
+        item.appendChild(p);
+        item.appendChild(meta);
+        item.appendChild(controls);
+
         historyContainer.appendChild(item);
       });
     }
 
-    // ✅ Add new post
+    // ---------- Add new post ----------
     document.getElementById("add-post").addEventListener("click", () => {
       const titleInput = document.getElementById("title-input");
       const contentInput = document.getElementById("content-input");
@@ -198,7 +299,20 @@
       }
     });
 
-    // Initial render
+    // ---------- hook modal show to render history live ----------
+    const historyModalEl = document.getElementById("historyModal");
+    if (historyModalEl) {
+      historyModalEl.addEventListener("show.bs.modal", () => {
+        // ensure we load/purge expired items right before showing
+        loadHistoryFromLocal();
+        renderHistory();
+      });
+    }
+
+    // ---------- load history from localStorage on startup ----------
+    loadHistoryFromLocal();
+
+    // ---------- Initial render ----------
     renderPosts();
   </script>
 
