@@ -14,7 +14,8 @@ A simple Blog App built with Bootstrap, HTML, CSS, and JavaScript.
 - Filter blogs by status (done/active) or tags  
 
 ## 📸 Screenshots
-(Add images of your UI here)  
+<img width="958" height="442" alt="project-pic" src="https://github.com/user-attachments/assets/d1633b99-5a02-4026-a937-0353456ae9c2" />
+
 
 ## 🛠️ Instructions
 1. Clone the repo  
